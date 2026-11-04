@@ -1,0 +1,164 @@
+# Copyright (c) 2026, Build With Hussain and contributors
+# For license information, please see license.txt
+
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+import frappe
+import stripe
+from frappe import _
+from frappe.utils.data import flt
+
+from bwh_payments_core.connectors.stripe.base import BaseStripeClient
+from bwh_payments_core.connectors.stripe.live import LiveStripeClient
+from bwh_payments_core.connectors.stripe.stub import StubStripeClient
+from bwh_payments_core.contract import PaymentGatewayBase
+from bwh_payments_core.currency import from_minor_units, to_minor_units, validate_transaction_currency
+from bwh_payments_core.models import CheckoutSession, RefundResult, WebhookEvent
+
+# Stripe substitutes this itself on redirect, so it has to survive URL encoding intact.
+STRIPE_SESSION_ID_PLACEHOLDER = "{CHECKOUT_SESSION_ID}"
+
+
+STRIPE_REFUND_EVENTS = ("refund.created", "refund.updated", "refund.failed", "charge.refund.updated")
+
+
+class StripeGateway(PaymentGatewayBase):
+	label = "Stripe"
+	credential_fields = (
+		"private_key",
+		"webhook_secret",
+		"success_url",
+		"failure_url",
+	)
+	description = "Cards and wallets, worldwide."
+	docs_url = "https://dashboard.stripe.com/apikeys"
+
+	def get_gateway_name(self) -> str:
+		return "Stripe"
+
+	def get_client(self) -> BaseStripeClient:
+		if frappe.in_test:
+			return StubStripeClient()
+
+		return LiveStripeClient(self.get_password("private_key"))
+
+	def create_session(
+		self,
+		amount: float,
+		currency: str,
+		reference: str | None = None,
+		customer: dict | None = None,
+		return_url: str | None = None,
+	) -> CheckoutSession:
+		validate_transaction_currency(currency)
+		session = self.get_client().create_checkout_session(
+			{
+				"mode": "payment",
+				"client_reference_id": reference,
+				"customer_email": (customer or {}).get("email") or None,
+				"line_items": [
+					{
+						"price_data": {
+							"currency": currency.lower(),
+							"product_data": {"name": _("Order Payment")},
+							"unit_amount": to_minor_units(amount, currency),
+						},
+						"quantity": 1,
+					}
+				],
+				"success_url": return_url or self.build_success_url(),
+				"cancel_url": return_url or self.failure_url,
+			}
+		)
+		return CheckoutSession(
+			session_id=session.id,
+			redirect_url=session.url,
+			success_url=session.success_url,
+			cancel_url=session.cancel_url,
+			failure_url=session.cancel_url,
+		)
+
+	def build_success_url(self) -> str:
+		if not self.success_url:
+			frappe.throw(_("Please set a Success URL in Stripe Gateway Settings"))
+		parts = urlsplit(self.success_url)
+		encoded_query = urlencode(parse_qsl(parts.query))
+		if encoded_query:
+			encoded_query += "&"
+		encoded_query += f"session_id={STRIPE_SESSION_ID_PLACEHOLDER}"
+		return urlunsplit((parts.scheme, parts.netloc, parts.path, encoded_query, parts.fragment))
+
+	def get_payment_status(self, session_id: str) -> str:
+		session = self.get_client().retrieve_checkout_session(session_id)
+		if session.payment_status == "paid":
+			return "Paid"
+		if session.status == "expired":
+			return "Expired"
+		return "Pending"
+
+	def cancel_session(self, session_id: str) -> bool:
+		try:
+			session = self.get_client().expire_checkout_session(session_id)
+		except stripe.StripeError:
+			return False
+
+		return session.status == "expired"
+
+	def handle_webhook(self, payload: bytes, headers: dict) -> WebhookEvent | None:
+		webhook_secret = self.get_password("webhook_secret")
+		if not webhook_secret:
+			frappe.throw(_("Webhook secret is not configured in Stripe Gateway Settings"))
+
+		signature = headers.get("Stripe-Signature")
+		if not signature:
+			frappe.throw(_("Missing Stripe-Signature header"))
+
+		event = stripe.Webhook.construct_event(payload, signature, webhook_secret)
+
+		if event["type"] in STRIPE_REFUND_EVENTS:
+			refund = event["data"]["object"]
+			return WebhookEvent(
+				refund_id=refund["id"],
+				status=refund["status"],
+				refund_amount=from_minor_units(refund["amount"], refund["currency"]),
+				transaction_ref=getattr(refund, "payment_intent", None),
+				event_id=event["id"],
+			)
+		if event["type"] != "checkout.session.completed":
+			return None
+
+		session = event["data"]["object"]
+		return WebhookEvent(
+			session_id=session["id"],
+			status="Paid" if session["payment_status"] == "paid" else "Pending",
+			event_id=event["id"],
+		)
+
+	def get_refund_status(self, session_id: str, refund_id: str) -> RefundResult:
+		refund = self.get_client().retrieve_refund(refund_id)
+		return RefundResult(refund_id=refund.id, status=refund.status)
+
+	def get_transaction_ref(self, session_id: str) -> str | None:
+		return self.get_client().retrieve_checkout_session(session_id).payment_intent
+
+	def refund_payment(self, session_id: str, amount: float, currency: str | None = None) -> RefundResult:
+		client = self.get_client()
+		session = client.retrieve_checkout_session(session_id)
+
+		if not session.payment_intent:
+			frappe.throw(_("No payment intent found for this session; the payment did not complete."))
+
+		currency = currency or session.currency
+		refund = client.create_refund(
+			{
+				"payment_intent": session.payment_intent,
+				"amount": to_minor_units(amount, currency),
+			}
+		)
+
+		if refund.status not in ("succeeded", "pending"):
+			frappe.throw(_("Refund failed with status: {0}").format(refund.status))
+
+		if refund.amount is not None:
+			amount = flt(from_minor_units(refund.amount, currency))
+		return RefundResult(refund_id=refund.id, status=refund.status, amount=amount)
