@@ -179,6 +179,8 @@ class GatewayPaymentRequestMixin:
 			["amount", "refund_amount", "status"],
 			for_update=True,
 		)
+		# A plain reload reads this transaction's REPEATABLE READ snapshot, which can predate the lock.
+		self.flags.for_update = True
 		self.reload()
 
 	def refund(self, amount: float | None = None, payment_entry: str | None = None) -> dict:
