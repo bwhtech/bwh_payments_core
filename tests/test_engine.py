@@ -1,5 +1,4 @@
-import importlib
-
+import frappe
 import pytest
 
 from bwh_payments_core.engine import webhook
@@ -38,13 +37,15 @@ def test_a_host_that_sets_no_return_endpoint_cannot_build_a_return_url():
 		get_return_url(GatewayPaymentRequestMixin.return_endpoint, "GPR-1")
 
 
-def test_the_queued_webhook_job_path_resolves(monkeypatch):
-	queued = {}
-	monkeypatch.setattr(
-		webhook.frappe, "enqueue", lambda method, **kwargs: queued.update(method=method), raising=False
-	)
+def test_the_webhook_job_is_queued_as_a_function_the_job_runner_can_call():
+	frappe.queued_jobs.clear()
 
 	webhook.enqueue_webhook("IR-1")
 
-	module_path, function_name = queued["method"].rsplit(".", 1)
-	assert getattr(importlib.import_module(module_path), function_name) is webhook.process_webhook
+	assert frappe.queued_jobs[-1]["method"] is webhook.process_webhook
+	assert frappe.queued_jobs[-1]["integration_request"] == "IR-1"
+
+
+def test_the_fake_job_runner_refuses_a_dotted_path_outside_an_installed_app():
+	with pytest.raises(frappe.AppNotInstalledError):
+		frappe.enqueue("bwh_payments_core.engine.webhook.process_webhook")

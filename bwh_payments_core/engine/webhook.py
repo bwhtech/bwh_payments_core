@@ -90,7 +90,8 @@ def find_payment_request(event: WebhookEvent, doctypes: Doctypes = DEFAULT_DOCTY
 
 def enqueue_webhook(integration_request: str):
 	frappe.enqueue(
-		"bwh_payments_core.engine.webhook.process_webhook",
+		# The function, not its dotted path: frappe.get_attr refuses a path outside an installed app.
+		process_webhook,
 		queue="short",
 		integration_request=integration_request,
 		now=frappe.in_test,
