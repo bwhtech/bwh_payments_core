@@ -1,0 +1,72 @@
+[project]
+name = "bwh-payments-core"
+version = "0.1.0"
+authors = [
+    { name = "developers@buildwithhussain.com", email = "developers@buildwithhussain.com"}
+]
+description = "Payment gateway connectors and the payment engine for Frappe apps"
+requires-python = ">=3.14"
+readme = "README.md"
+license = { file = "license.txt" }
+dependencies = [
+    # frappe is not a pip dependency: every host app runs inside a bench that provides it.
+    # StripeClient.v1 needs 12.5 or newer. frappe/payments pins stripe~=10.12, so the two cannot share a venv.
+    "stripe>=12.5,<16",
+    "pydantic>=2,<3",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.urls]
+Source = "https://github.com/bwhtech/bwh_payments_core"
+
+[build-system]
+requires = ["flit_core >=3.4,<4"]
+build-backend = "flit_core.buildapi"
+
+[tool.flit.module]
+name = "bwh_payments_core"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py314"
+
+[tool.ruff.lint]
+select = [
+    "F",
+    "E",
+    "W",
+    "I",
+    "UP",
+    "B",
+    "RUF",
+]
+ignore = [
+    "B017", # assertRaises(Exception) - should be more specific
+    "B018", # useless expression, not assigned to anything
+    "B023", # function doesn't bind loop variable - will have last iteration's value
+    "B904", # raise inside except without from
+    "E101", # indentation contains mixed spaces and tabs
+    "E402", # module level import not at top of file
+    "E501", # line too long
+    "E741", # ambiguous variable name
+    "F401", # "unused" imports
+    "F403", # can't detect undefined names from * import
+    "F405", # can't detect undefined names from * import
+    "F722", # syntax error in forward type annotation
+    "W191", # indentation contains tabs
+    "UP030", # Use implicit references for positional format fields (translations)
+    "UP031", # Use format specifiers instead of percent format
+    "UP032", # Use f-string instead of `format` call (translations)
+    "UP037", # quoted annotations
+    "UP040", # Use type aliases instead of type annotations
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "tab"
+docstring-code-format = true
