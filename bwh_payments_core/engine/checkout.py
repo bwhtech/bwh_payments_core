@@ -1,0 +1,38 @@
+import frappe
+from frappe import _
+
+from bwh_payments_core.engine import DEFAULT_DOCTYPES, Doctypes
+from bwh_payments_core.utils import run_as_administrator
+
+
+def get_return_url(return_endpoint: str | None, payment_request: str) -> str:
+	if not return_endpoint:
+		raise NotImplementedError("Set return_endpoint on the payment request controller to use redirect_to")
+	return frappe.utils.get_url(f"{return_endpoint}?request={payment_request}")
+
+
+def return_from_gateway(request: str, doctypes: Doctypes = DEFAULT_DOCTYPES):
+	"""Confirm the payment with the gateway, then send the shopper on to the caller's page.
+
+	The browser's arrival proves nothing, so the status is read from the gateway, never from the URL.
+	The host's guest GET endpoint calls this.
+	"""
+	redirect_to = frappe.db.get_value(doctypes.payment_request, request, "redirect_to")
+	if not redirect_to:
+		raise frappe.DoesNotExistError(_("Payment not found"))
+
+	payment_request = frappe.get_doc(doctypes.payment_request, request)
+	if payment_request.status == "Pending":
+		try:
+			with run_as_administrator():
+				payment_request.sync_status()
+			# Frappe rolls back GET requests; the gateway's answer must be kept.
+			frappe.local.flags.commit = True
+		except Exception:
+			# The shopper still goes on; the webhook settles the payment later.
+			frappe.db.rollback()
+			frappe.clear_last_message()
+			frappe.log_error(title=_("Could not confirm payment {0} on return").format(request))
+
+	frappe.local.response["type"] = "redirect"
+	frappe.local.response["location"] = redirect_to
