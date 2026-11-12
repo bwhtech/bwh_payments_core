@@ -30,6 +30,8 @@ name = "bwh_payments_core"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# tests/fake_frappe stands in for frappe, so the tests run without a bench or a site.
+pythonpath = [".", "tests/fake_frappe"]
 
 [tool.ruff]
 line-length = 110

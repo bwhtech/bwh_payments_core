@@ -37,8 +37,7 @@ jobs:
       - name: Install
         run: pip install -e ".[test]"
       - name: Run tests
-        # Exit code 5 is pytest's "no tests collected".
-        run: python -m pytest || [ $? -eq 5 ]
+        run: python -m pytest
 
   pr-title:
     name: PR title
