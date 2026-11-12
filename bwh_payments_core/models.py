@@ -43,24 +43,3 @@ class WebhookEvent(GatewayResult):
 		if not (self.session_id or self.refund_id):
 			raise ValueError("A webhook event needs a session_id or a refund_id")
 		return self
-
-
-class GatewayOption(BaseModel):
-	"""A gateway as a storefront lists it. Logos are site-relative asset paths."""
-
-	name: str
-	title: str
-	logo: str | None = None
-	logo_dark: str | None = None
-
-
-class GatewayInfo(BaseModel):
-	"""A gateway this app can take payments through, as a settings screen lists it, set up or not."""
-
-	name: str
-	settings_doctype: str
-	description: str | None = None
-	docs_url: str | None = None
-	reusable_checkout: bool = False
-	logo: str | None = None
-	logo_dark: str | None = None
