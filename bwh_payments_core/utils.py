@@ -1,4 +1,5 @@
 import re
+from contextlib import contextmanager
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import frappe
@@ -25,3 +26,23 @@ def add_reference_id(url: str, reference: str | None) -> str:
 	parts = urlsplit(get_localised_url(url))
 	query = [*parse_qsl(parts.query), ("reference_id", reference or "")]
 	return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
+@contextmanager
+def run_as_administrator():
+	session = frappe._dict(frappe.local.session)
+	try:
+		frappe.set_user("Administrator")
+		yield
+	finally:
+		frappe.set_user(session.user)
+		# Restore the whole session in place: set_user overwrites the sid, which the request saves back.
+		frappe.local.session.update(session)
+
+
+def is_local_path(url: str | None) -> bool:
+	# Browsers read //host and /\host as another site.
+	if not url or not url.startswith("/") or url.startswith(("//", "/\\")):
+		return False
+	parts = urlsplit(url)
+	return not (parts.scheme or parts.netloc)

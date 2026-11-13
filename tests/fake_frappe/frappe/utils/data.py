@@ -27,6 +27,10 @@ def cint(s, default=0):
 			return default
 
 
+def cstr(s, encoding="utf-8"):
+	return "" if s is None else str(s)
+
+
 # Frappe's default rounding method on a site with no System Settings choice.
 def bankers_rounding_legacy(num, precision):
 	multiplier = 10**precision

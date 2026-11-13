@@ -10,6 +10,10 @@ class ValidationError(Exception):
 	pass
 
 
+class AppNotInstalledError(ValidationError):
+	pass
+
+
 class _dict(dict):
 	def __getattr__(self, key):
 		return self.get(key)
@@ -17,6 +21,9 @@ class _dict(dict):
 	def __setattr__(self, key, value):
 		self[key] = value
 
+
+installed_apps = ("frappe",)
+queued_jobs = []
 
 local = SimpleNamespace(lang="en", request_ip="127.0.0.1")
 
@@ -55,3 +62,10 @@ def parse_json(value):
 	if isinstance(value, dict):
 		value = _dict(value)
 	return value
+
+
+def enqueue(method, **kwargs):
+	# The real job runner resolves a string through get_attr, which refuses a library's dotted path.
+	if isinstance(method, str) and method.split(".", 1)[0] not in installed_apps:
+		raise AppNotInstalledError(f"App {method.split('.', 1)[0]} is not installed")
+	queued_jobs.append({"method": method, **kwargs})
