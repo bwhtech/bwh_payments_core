@@ -22,13 +22,13 @@ def return_from_gateway(request: str, doctypes: Doctypes = DEFAULT_DOCTYPES):
 		try:
 			with run_as_administrator():
 				payment_request.sync_status()
-			# Frappe rolls back GET requests; the gateway's answer must be kept.
-			frappe.local.flags.commit = True
 		except Exception:
 			# The shopper still goes on; the webhook settles the payment later.
 			frappe.db.rollback()
 			frappe.clear_last_message()
 			frappe.log_error(title=_("Could not confirm payment {0} on return").format(request))
+		# Frappe rolls back GET requests; keep the gateway's answer or the error log.
+		frappe.local.flags.commit = True
 
 	frappe.local.response["type"] = "redirect"
 	frappe.local.response["location"] = redirect_to

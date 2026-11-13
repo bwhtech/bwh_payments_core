@@ -47,6 +47,8 @@ class GatewayRefundMixin:
 
 	def lock_row(self):
 		frappe.db.get_value(self.doctype, self.name, "status", for_update=True)
+		# A plain reload reads this transaction's REPEATABLE READ snapshot, which can predate the lock.
+		self.flags.for_update = True
 		self.reload()
 
 	def apply_gateway_result(self, result: RefundResult):
