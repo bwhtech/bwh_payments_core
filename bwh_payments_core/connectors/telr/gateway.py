@@ -1,0 +1,141 @@
+# Copyright (c) 2026, Build With Hussain and contributors
+# For license information, please see license.txt
+
+import frappe
+from frappe import _
+from frappe.utils.data import flt
+
+from bwh_payments_core.connectors.telr.base import BaseTelrClient
+from bwh_payments_core.connectors.telr.live import LiveTelrClient
+from bwh_payments_core.connectors.telr.stub import StubTelrClient
+from bwh_payments_core.contract import PaymentGatewayBase
+from bwh_payments_core.currency import get_minor_unit_exponent, validate_transaction_currency
+from bwh_payments_core.models import CheckoutSession, RefundResult
+from bwh_payments_core.utils import add_reference_id, get_localised_url
+
+# Telr reports free text. Unmapped states stay Pending.
+TELR_STATUS_MAP = {
+	"paid": "Paid",
+	"pending": "Pending",
+	"declined": "Not Paid",
+	"cancelled": "Cancelled",
+	"canceled": "Cancelled",
+	"expired": "Expired",
+}
+
+# Telr does not say whether the store captures on authorisation, hence `treat_authorised_as_paid`.
+TELR_AUTHORISED_STATUSES = ("authorised", "authorized")
+TELR_ACCEPTED_STATUS = "A"
+
+
+class TelrGateway(PaymentGatewayBase):
+	label = "Telr"
+	credential_fields = (
+		"store_id",
+		"auth_key",
+		"remote_auth_key",
+		"test_mode",
+		"currency",
+		"treat_authorised_as_paid",
+		"authorised_url",
+		"declined_url",
+		"cancelled_url",
+	)
+	description = "Cards and local methods across the GCC."
+	docs_url = "https://telr.com/support/knowledge-base/hosted-payment-page-integration-guide/"
+
+	def get_gateway_name(self) -> str:
+		return "Telr"
+
+	def get_client(self) -> BaseTelrClient:
+		if frappe.in_test:
+			return StubTelrClient()
+
+		return LiveTelrClient(self.store_id, self.get_password("auth_key"), bool(self.test_mode))
+
+	def get_account_information(self):
+		return self.get_client().get_account_information()
+
+	def create_session(
+		self,
+		amount: float,
+		currency: str,
+		reference: str | None = None,
+		customer: dict | None = None,
+		return_url: str | None = None,
+	) -> CheckoutSession:
+		currency = currency or self.currency
+		validate_transaction_currency(currency)
+
+		if return_url:
+			return_urls = dict.fromkeys(("authorised", "declined", "cancelled"), return_url)
+		else:
+			return_urls = {
+				"authorised": self.build_return_url(self.authorised_url, reference),
+				"declined": get_localised_url(self.declined_url),
+				"cancelled": get_localised_url(self.cancelled_url),
+			}
+		order = self.get_client().create_order(
+			{
+				"cartid": reference,
+				"test": "1" if self.test_mode else "0",
+				"amount": format_telr_amount(amount, currency),
+				"currency": currency,
+				"description": _("Online order payment"),
+			},
+			return_urls,
+			customer or {},
+		)
+		return CheckoutSession(
+			session_id=order.ref,
+			redirect_url=order.url,
+			success_url=return_urls["authorised"],
+			cancel_url=return_urls["cancelled"],
+			failure_url=return_urls["declined"],
+		)
+
+	def build_return_url(self, url: str, reference: str | None) -> str:
+		"""Telr does not echo its order ref, so add our request name."""
+		if not url:
+			frappe.throw(_("Please set the Authorised URL in Telr Gateway Settings"))
+		return add_reference_id(url, reference)
+
+	def get_payment_status(self, session_id: str) -> str:
+		order = self.get_client().check_order(session_id)
+		status_text = ((order.status.text if order.status else None) or "").strip().casefold()
+		if status_text in TELR_AUTHORISED_STATUSES:
+			return "Paid" if self.treat_authorised_as_paid else "Pending"
+		return TELR_STATUS_MAP.get(status_text, "Pending")
+
+	def get_transaction_ref(self, session_id: str) -> str | None:
+		transaction = self.get_client().check_order(session_id).transaction
+		return transaction.ref if transaction and transaction.ref else None
+
+	def handle_webhook(self, payload: bytes, headers: dict) -> None:
+		# Telr webhooks are unsigned; status comes only from get_payment_status.
+		return None
+
+	def refund_payment(self, session_id: str, amount: float, currency: str | None = None) -> RefundResult:
+		currency = currency or self.currency
+		remote_auth_key = self.get_password("remote_auth_key")
+		if not remote_auth_key:
+			frappe.throw(_("Please set the Remote Auth Key in Telr Gateway Settings to issue refunds"))
+
+		transaction_ref = self.get_transaction_ref(session_id)
+		if not transaction_ref:
+			frappe.throw(_("Telr has no settled transaction for this order; it cannot be refunded."))
+
+		result = self.get_client().refund(
+			transaction_ref,
+			format_telr_amount(amount, currency),
+			currency,
+			remote_auth_key,
+		)
+		if result.status != TELR_ACCEPTED_STATUS:
+			frappe.throw(_("Telr refused the refund: {0}").format(result.message or _("unknown error")))
+
+		return RefundResult(refund_id=result.transaction_ref, status="succeeded", amount=flt(amount))
+
+
+def format_telr_amount(amount: float, currency: str) -> str:
+	return str(flt(amount, get_minor_unit_exponent(currency)))
