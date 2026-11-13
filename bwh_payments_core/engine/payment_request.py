@@ -32,7 +32,6 @@ class GatewayPaymentRequestMixin:
 			frappe.throw(_("A new checkout must start as Pending"))
 
 	def validate_amount_precision(self):
-		"""Without `use_number_format_from_currency`, a default site rounds KWD to 2 decimals."""
 		exponent = get_minor_unit_exponent(self.currency_code)
 		if flt(self.amount, self.precision("amount")) == flt(self.amount, exponent):
 			return
@@ -122,8 +121,7 @@ class GatewayPaymentRequestMixin:
 		if self.status == "Pending":
 			status = self.get_gateway_settings().get_payment_status(self.order_ref)
 
-		# Locked after the slow gateway call, so a webhook committed meanwhile cannot cause a
-		# TimestampMismatchError.
+		# Locked after the slow gateway call, or a webhook committed meanwhile raises TimestampMismatchError.
 		self.lock_row()
 
 		if flt(self.refund_amount) > 0:
@@ -172,7 +170,6 @@ class GatewayPaymentRequestMixin:
 		return "Partially Refunded"
 
 	def lock_row(self):
-		"""Row lock plus reload, so concurrent refunds cannot both pass the over-refund guard."""
 		frappe.db.get_value(
 			self.doctype,
 			self.name,
@@ -191,7 +188,6 @@ class GatewayPaymentRequestMixin:
 	def create_refund(
 		self, amount: float | None = None, reference: str | None = None, payment_entry: str | None = None
 	):
-		"""Refund `amount` (the whole remaining balance when None) and return the Gateway Refund."""
 		self.lock_row()
 
 		if self.status not in REFUNDABLE_STATUSES:
@@ -230,8 +226,7 @@ class GatewayPaymentRequestMixin:
 				"payment_entry": payment_entry,
 			}
 		).insert(ignore_permissions=True)
-		# Committed before the slow gateway call, which releases the row lock: from here the Pending
-		# refund holds its amount against any concurrent refund.
+		# Commit before the slow gateway call (drops the lock); the Pending refund now holds its amount.
 		frappe.db.commit()  # nosemgrep: frappe-manual-commit
 
 		try:
@@ -250,7 +245,6 @@ class GatewayPaymentRequestMixin:
 		self.update_pending_refunds()
 
 	def update_pending_refunds(self):
-		"""Ask the gateway about every Pending refund, for when a refund webhook never arrived."""
 		settings = self.get_gateway_settings()
 		for name in frappe.get_all(
 			self.doctypes.refund,
@@ -265,7 +259,6 @@ class GatewayPaymentRequestMixin:
 		self.record_unknown_refunds(settings)
 
 	def record_unknown_refunds(self, settings):
-		"""Record refunds raised outside this app whose webhook never arrived."""
 		# One of our refunds still waiting for its id may be among them; recording it now would count it twice.
 		if frappe.db.exists(
 			self.doctypes.refund,
@@ -282,7 +275,6 @@ class GatewayPaymentRequestMixin:
 				)
 
 	def record_external_refund(self, refund_id: str, amount: float):
-		"""Record a refund raised outside this app, e.g. from the gateway's dashboard."""
 		return frappe.get_doc(
 			{
 				"doctype": self.doctypes.refund,
@@ -317,7 +309,7 @@ class GatewayPaymentRequestMixin:
 		self.refund_id = ",".join(existing_ids)
 
 	def get_refunded_payment_entries(self) -> list[str]:
-		"""Payment Entries refunded before Gateway Refund kept the ledger."""
+		# Legacy ledger: entries refunded before Gateway Refund existed.
 		return [entry for entry in (self.refund_payment_entries or "").split(",") if entry]
 
 	def apply_webhook_status(self, status: str, event_id: str | None = None) -> bool:
@@ -337,14 +329,10 @@ class GatewayPaymentRequestMixin:
 
 
 def get_original_payment_entry(payment_entry: str | int) -> str:
-	"""Key the refund ledger on the first entry, so an amendment cannot refund twice.
-
-	Returns `str`: an autoincrement `int` name would never match the comma-joined ledger.
-	"""
-	name = payment_entry
-	while amended_from := frappe.db.get_value("Payment Entry", name, "amended_from"):
-		name = amended_from
-	return cstr(name)
+	while amended_from := frappe.db.get_value("Payment Entry", payment_entry, "amended_from"):
+		payment_entry = amended_from
+	# cstr: an autoincrement int name would never match the comma-joined ledger.
+	return cstr(payment_entry)
 
 
 def refund_on_payment_entry(doc, method=None, doctypes: Doctypes = DEFAULT_DOCTYPES):

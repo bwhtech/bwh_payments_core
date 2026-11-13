@@ -30,22 +30,18 @@ def add_reference_id(url: str, reference: str | None) -> str:
 
 @contextmanager
 def run_as_administrator():
-	"""Settling an order downstream needs a real user. Restored after, so a worker does not stay Administrator.
-
-	`set_user` overwrites the session's sid and data, and a web request saves that session back when it
-	ends, so the whole session is restored in place. Otherwise a signed-in shopper is logged out.
-	"""
 	session = frappe._dict(frappe.local.session)
 	try:
 		frappe.set_user("Administrator")
 		yield
 	finally:
 		frappe.set_user(session.user)
+		# Restore the whole session in place: set_user overwrites the sid, which the request saves back.
 		frappe.local.session.update(session)
 
 
 def is_local_path(url: str | None) -> bool:
-	"""A path on this site. Browsers read `//host` and `/\\host` as another site."""
+	# Browsers read //host and /\host as another site.
 	if not url or not url.startswith("/") or url.startswith(("//", "/\\")):
 		return False
 	parts = urlsplit(url)

@@ -1,10 +1,4 @@
-"""Test helpers for host apps that take payments through bwh_payments_core.
-
-They drive an in-memory gateway, so a consumer's tests exercise the real payment request, refund and
-webhook code without naming a provider or touching the network. Refunds and webhook logs commit:
-wrap the test class in `without_commits()`, or call `remove_test_gateway()` after the class rollback.
-They expect the host's Razorpay Gateway Settings Single and the default doctype names.
-"""
+# Refunds and webhook logs commit: use without_commits(), or remove_test_gateway() after rollback.
 
 from contextlib import contextmanager
 
@@ -26,10 +20,7 @@ REFUND_STATUSES = {"Pending": "pending", "Processed": "processed", "Failed": "fa
 
 @contextmanager
 def without_commits():
-	"""Turn commits into no-ops, so the test's own rollback also undoes refunds and webhook logs.
-
-	Leave it before the class rollback runs: inside it, rollback is a no-op too.
-	"""
+	# Leave before the class rollback runs: inside, rollback is a no-op too.
 	frappe.db._disable_transaction_control += 1
 	try:
 		yield
@@ -38,12 +29,10 @@ def without_commits():
 
 
 def reset():
-	"""Forget every payment and refund the in-memory gateway holds. Call in `setUp`."""
 	StubRazorpayClient.reset()
 
 
 def configure_test_gateway(name: str = TEST_GATEWAY) -> str:
-	"""An enabled Payment Gateway Profile on the in-memory gateway. Returns its name."""
 	settings = frappe.get_single(SETTINGS)
 	settings.update(
 		{
@@ -73,7 +62,6 @@ def remove_test_gateway(name: str = TEST_GATEWAY):
 
 
 def pay(payment_request: str):
-	"""The shopper pays, and the payment is confirmed as it would be on their return."""
 	doc = frappe.get_doc(DOCTYPES.payment_request, payment_request)
 	StubRazorpayClient.pay(doc.order_ref)
 	with run_as_administrator():
@@ -81,19 +69,16 @@ def pay(payment_request: str):
 
 
 def set_next_refund_status(status: str):
-	"""How the gateway answers the next refund: "Pending", "Processed" or "Failed" (refused)."""
 	StubRazorpayClient.next_refund_status = REFUND_STATUSES[status]
 
 
 def set_refund_status(refund: str, status: str):
-	"""The gateway now reports this refund as "Processed" or "Failed", for `sync_refunds` to read."""
 	StubRazorpayClient.set_refund_status(
 		frappe.db.get_value(DOCTYPES.refund, refund, "refund_id"), REFUND_STATUSES[status]
 	)
 
 
 def send_refund_webhook(refund: str, status: str):
-	"""The gateway reports a refund raised through this app as "Processed" or "Failed"."""
 	gateway_refund = frappe.get_doc(DOCTYPES.refund, refund)
 	payment_request = frappe.get_doc(DOCTYPES.payment_request, gateway_refund.payment_request)
 	post_refund_event(
@@ -105,7 +90,6 @@ def send_refund_webhook(refund: str, status: str):
 
 
 def send_external_refund_webhook(payment_request: str, amount: float, status: str = "Processed") -> str:
-	"""The gateway reports a refund raised outside this app, e.g. from its dashboard. Returns its id."""
 	refund_id = f"rfnd_{frappe.generate_hash(length=12)}"
 	post_refund_event(
 		frappe.get_doc(DOCTYPES.payment_request, payment_request), refund_id, REFUND_STATUSES[status], amount

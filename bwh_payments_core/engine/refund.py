@@ -55,7 +55,6 @@ class GatewayRefundMixin:
 		self.save(ignore_permissions=True)
 
 	def apply_gateway_status(self, status: str | None, event_id: str | None = None) -> bool:
-		"""Move a Pending refund to the status the gateway reports. A settled refund never changes."""
 		self.lock_row()
 
 		status = normalise_refund_status(status)

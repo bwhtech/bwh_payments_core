@@ -12,16 +12,12 @@ def get_return_url(return_endpoint: str | None, payment_request: str) -> str:
 
 
 def return_from_gateway(request: str, doctypes: Doctypes = DEFAULT_DOCTYPES):
-	"""Confirm the payment with the gateway, then send the shopper on to the caller's page.
-
-	The browser's arrival proves nothing, so the status is read from the gateway, never from the URL.
-	The host's guest GET endpoint calls this.
-	"""
 	redirect_to = frappe.db.get_value(doctypes.payment_request, request, "redirect_to")
 	if not redirect_to:
 		raise frappe.DoesNotExistError(_("Payment not found"))
 
 	payment_request = frappe.get_doc(doctypes.payment_request, request)
+	# The browser's arrival proves nothing: read the status from the gateway, never the URL.
 	if payment_request.status == "Pending":
 		try:
 			with run_as_administrator():

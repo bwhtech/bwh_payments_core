@@ -12,7 +12,6 @@ WEBHOOK_SAVEPOINT = "bwh_payments_webhook"
 
 
 def handle(doctypes: Doctypes = DEFAULT_DOCTYPES):
-	"""Verify, log and queue a gateway's delivery. The host's guest POST endpoint calls this, rate-limited."""
 	gateway = frappe.request.args.get("gateway")
 	if not gateway:
 		return reject()
@@ -23,11 +22,10 @@ def handle(doctypes: Doctypes = DEFAULT_DOCTYPES):
 	if not profile or not profile.enabled:
 		return reject()
 
-	payload = frappe.request.get_data()
-	headers = dict(frappe.request.headers)
-
 	try:
-		event = frappe.get_single(profile.gateway_settings).handle_webhook(payload, headers)
+		event = frappe.get_single(profile.gateway_settings).handle_webhook(
+			frappe.request.get_data(), dict(frappe.request.headers)
+		)
 		# Inside the try: an unparseable verified event is still a 400, so the gateway retries.
 		event = WebhookEvent.model_validate(event) if event else None
 	except Exception:
@@ -99,12 +97,6 @@ def enqueue_webhook(integration_request: str):
 
 
 def process_webhook(integration_request: str):
-	"""Apply a verified event that `handle` logged and queued.
-
-	It runs in a job so a broken referenced document cannot turn the gateway's delivery into a 500
-	that it retries until it disables the endpoint. A failure is logged and can be retried with
-	`retry_webhook` once fixed.
-	"""
 	log = frappe.get_doc("Integration Request", integration_request)
 	event = WebhookEvent.model_validate(frappe.parse_json(log.data))
 
@@ -160,8 +152,7 @@ def apply_refund_event(payment_request, event: WebhookEvent):
 		refund_doctype,
 		{"payment_request": payment_request.name, "refund_id": ["is", "not set"], "status": "Pending"},
 	):
-		# One of our refunds is still waiting for the gateway's answer and may be this one; recording
-		# it now as a stranger would count it twice.
+		# May be one of our refunds still awaiting its id; recording it as external would count it twice.
 		raise frappe.RetryBackgroundJobError
 	else:
 		refund = payment_request.record_external_refund(event.refund_id, event.refund_amount)
@@ -170,10 +161,7 @@ def apply_refund_event(payment_request, event: WebhookEvent):
 
 
 def reject() -> dict:
-	"""One opaque 400 for every failure, so callers cannot probe gateways or verifiers.
-
-	The message log is cleared so a verifier's `frappe.throw` does not leak in `_server_messages`.
-	"""
+	# Cleared so a verifier's frappe.throw does not leak through _server_messages.
 	frappe.local.message_log = []
 	frappe.local.response["http_status_code"] = 400
 	return {"status": "error", "message": _("Webhook could not be verified")}
@@ -181,7 +169,7 @@ def reject() -> dict:
 
 def log_webhook(
 	gateway: str,
-	status: str = "Queued",
+	status: str,
 	event: WebhookEvent | None = None,
 	reference_docname: str | None = None,
 	doctypes: Doctypes = DEFAULT_DOCTYPES,
